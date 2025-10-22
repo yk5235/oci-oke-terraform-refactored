@@ -17,8 +17,16 @@ ssh_public_key = "ssh-rsa AAAAB3... your-ssh-public-key-here"
 # ============================================
 # NETWORK CONFIGURATION: Public or Private?
 # ============================================
-kubapi_subnet_is_public = false  # true = public Kubernetes API, false = private (bastion access)
-lb_subnet_is_public     = false  # true = public load balancers, false = private (internal only)
+
+# Kubernetes API Access:
+# - false (default): Private API, access via bastion/VPN
+# - true: Public API with 0.0.0.0/0:6443 ingress rule added automatically
+kubapi_subnet_is_public = false
+
+# Load Balancer Access:
+# - false (default): Private LB, internal services only  
+# - true: Public LB, can receive internet traffic
+lb_subnet_is_public = false
 
 # ============================================
 # OKE CLUSTER CONFIGURATION
@@ -47,21 +55,39 @@ pod_nsg_ids                               = []
 # ============================================
 
 # Scenario 1: Production (All Private) - DEFAULT
-# kubapi_subnet_is_public = false
-# lb_subnet_is_public     = false
-# Access API via bastion, LB internal only
+# kubapi_subnet_is_public = false  # Access via bastion only
+# lb_subnet_is_public     = false  # Internal services
+# Security: Most secure, requires bastion/VPN
 
 # Scenario 2: Development (Public API, Private LB)
-# kubapi_subnet_is_public = true
-# lb_subnet_is_public     = false
-# Direct kubectl access, LB internal only
+# kubapi_subnet_is_public = true   # Direct kubectl from anywhere
+# lb_subnet_is_public     = false  # Internal services
+# Security: API exposed on 0.0.0.0/0:6443, use for dev/test only
+# Note: Automatically adds security rule allowing 0.0.0.0/0 → 6443
 
 # Scenario 3: Public Application (Private API, Public LB)
-# kubapi_subnet_is_public = false
-# lb_subnet_is_public     = true
-# API via bastion, LB accepts internet traffic
+# kubapi_subnet_is_public = false  # Access via bastion
+# lb_subnet_is_public     = true   # Public-facing services
+# Security: API secured, LB accepts internet traffic
 
-# Scenario 4: Testing (All Public)
-# kubapi_subnet_is_public = true
-# lb_subnet_is_public     = true
-# Everything publicly accessible
+# Scenario 4: Quick Testing (All Public)
+# kubapi_subnet_is_public = true   # Direct kubectl access
+# lb_subnet_is_public     = true   # Public services
+# Security: Everything public, use for testing only
+# Note: API exposed on 0.0.0.0/0:6443
+
+# ============================================
+# SECURITY NOTES
+# ============================================
+
+# When kubapi_subnet_is_public = true:
+# - Automatically adds ingress rule: 0.0.0.0/0 → TCP/6443
+# - Kubernetes API is accessible from anywhere
+# - ⚠️ WARNING: Use only for dev/test environments
+# - For production, keep false and use bastion host
+
+# When kubapi_subnet_is_public = false:
+# - No public ingress rules added
+# - API accessible only from within VCN
+# - Requires bastion host or VPN for external access
+# - ✅ RECOMMENDED for production

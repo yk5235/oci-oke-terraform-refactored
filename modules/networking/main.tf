@@ -1,6 +1,5 @@
 # ============================================
-# NETWORKING MODULE MAIN - REFACTORED
-# Clean, modular, and well-structured
+# NETWORKING MODULE MAIN - WITH AUTO PUBLIC KUBEAPI ACCESS
 # ============================================
 
 # ============================================
@@ -8,31 +7,31 @@
 # ============================================
 
 locals {
-  # Subnet definitions with calculated public/private settings
+  # Subnet definitions
   subnets = {
     kubapi = {
-      cidr_block                 = cidrsubnet(var.vcn_cidr, 13, 0) # 10.0.0.0/29
+      cidr_block                 = cidrsubnet(var.vcn_cidr, 13, 0)  # 10.0.0.0/29
       display_name               = var.kubapi_subnet_is_public ? "sn-okedev-kubapi-pub" : "sn-okedev-kubapi-priv"
       dns_label                  = "kubapi"
       prohibit_public_ip_on_vnic = !var.kubapi_subnet_is_public
       is_public                  = var.kubapi_subnet_is_public
     }
     workernode = {
-      cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 1) # 10.0.1.0/24
+      cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 1)   # 10.0.1.0/24
       display_name               = "sn-okedev-workernode-priv"
       dns_label                  = "worker"
       prohibit_public_ip_on_vnic = true
       is_public                  = false
     }
     pod = {
-      cidr_block                 = cidrsubnet(var.vcn_cidr, 3, 1) # 10.0.32.0/19
+      cidr_block                 = cidrsubnet(var.vcn_cidr, 3, 1)   # 10.0.32.0/19
       display_name               = "sn-okedev-pod-priv"
       dns_label                  = "pod"
       prohibit_public_ip_on_vnic = true
       is_public                  = false
     }
     lb = {
-      cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 2) # 10.0.2.0/24
+      cidr_block                 = cidrsubnet(var.vcn_cidr, 8, 2)   # 10.0.2.0/24
       display_name               = var.lb_subnet_is_public ? "sn-okedev-lb-pub" : "sn-okedev-lb-priv"
       dns_label                  = "lb"
       prohibit_public_ip_on_vnic = !var.lb_subnet_is_public
@@ -86,17 +85,28 @@ locals {
     }
   ]
 
-  # Security list definitions (from Excel)
+  # Base ingress rules for KubeAPI (always included)
+  kubapi_base_ingress = [
+    { stateless = false, source = "10.0.1.0/24", source_type = "CIDR_BLOCK", protocol = "6", description = "Worker to API (6443)", tcp_options = { min = 6443, max = 6443 } },
+    { stateless = false, source = "10.0.1.0/24", source_type = "CIDR_BLOCK", protocol = "6", description = "Worker to API (12250)", tcp_options = { min = 12250, max = 12250 } },
+    { stateless = false, source = "10.0.32.0/19", source_type = "CIDR_BLOCK", protocol = "6", description = "Pod to API (6443)", tcp_options = { min = 6443, max = 6443 } },
+    { stateless = false, source = "10.0.32.0/19", source_type = "CIDR_BLOCK", protocol = "6", description = "Pod to API (12250)", tcp_options = { min = 12250, max = 12250 } },
+    { stateless = false, source = "10.0.1.0/24", source_type = "CIDR_BLOCK", protocol = "1", description = "Path Discovery", icmp_options = { type = 3, code = 4 } }
+  ]
+
+  # Public internet access rule (only when kubapi is public)
+  kubapi_public_ingress = var.kubapi_subnet_is_public ? [
+    { stateless = false, source = "0.0.0.0/0", source_type = "CIDR_BLOCK", protocol = "6", description = "Public internet to Kubernetes API (6443)", tcp_options = { min = 6443, max = 6443 } }
+  ] : []
+
+  # Combined KubeAPI ingress rules
+  kubapi_ingress = concat(local.kubapi_base_ingress, local.kubapi_public_ingress)
+
+  # Security list definitions
   security_lists = {
     sl_kubapi = {
       display_name = "sl-okedev-kubapi"
-      ingress = [
-        { stateless = false, source = "10.0.1.0/24", source_type = "CIDR_BLOCK", protocol = "6", description = "Worker to API (6443)", tcp_options = { min = 6443, max = 6443 } },
-        { stateless = false, source = "10.0.1.0/24", source_type = "CIDR_BLOCK", protocol = "6", description = "Worker to API (12250)", tcp_options = { min = 12250, max = 12250 } },
-        { stateless = false, source = "10.0.32.0/19", source_type = "CIDR_BLOCK", protocol = "6", description = "Pod to API (6443)", tcp_options = { min = 6443, max = 6443 } },
-        { stateless = false, source = "10.0.32.0/19", source_type = "CIDR_BLOCK", protocol = "6", description = "Pod to API (12250)", tcp_options = { min = 12250, max = 12250 } },
-        { stateless = false, source = "10.0.1.0/24", source_type = "CIDR_BLOCK", protocol = "1", description = "Path Discovery", icmp_options = { type = 3, code = 4 } }
-      ]
+      ingress      = local.kubapi_ingress
       egress = [
         { stateless = false, destination = "OCI_SERVICES", destination_type = "SERVICE_CIDR_BLOCK", protocol = "6", description = "API to OKE (443)", tcp_options = { min = 443, max = 443 } },
         { stateless = false, destination = "10.0.32.0/19", destination_type = "CIDR_BLOCK", protocol = "all", description = "API to Pods" },
