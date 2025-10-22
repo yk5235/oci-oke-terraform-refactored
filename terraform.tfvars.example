@@ -1,62 +1,67 @@
 # ============================================
-# TERRAFORM VARIABLES EXAMPLE - REFACTORED
+# TERRAFORM VARIABLES EXAMPLE - SIMPLIFIED
 # Copy this file to terraform.tfvars and fill in your values
 # ============================================
 
 # ============================================
-# PROVIDER CONFIGURATION
+# REQUIRED: Provider & Compartment
 # ============================================
-
-region = "ap-singapore-1"
-
-# ============================================
-# COMMON
-# ============================================
-
+region         = "ap-singapore-1"
 compartment_id = "ocid1.compartment.oc1..your-compartment-ocid-here"
 
 # ============================================
-# PUBLIC/PRIVATE CONFIGURATION
-# Set to true to make subnets public, false for private
+# REQUIRED: SSH Key for Worker Nodes
 # ============================================
-
-kubapi_subnet_is_public = false  # Set to true for public Kubernetes API
-lb_subnet_is_public     = false  # Set to true for public Load Balancers
-
-# ============================================
-# NETWORKING (Optional - uses defaults)
-# ============================================
-
-# vcn_cidr         = "10.0.0.0/16"
-# vcn_display_name = "vcn-okedev"
-# vcn_dns_label    = "okedev"
-# nat_display_name = "ng-okedev"
-# svc_display_name = "sg-okedev"
-# igw_display_name = "ig-okedev"
-
-# ============================================
-# OKE CLUSTER (Optional - uses defaults)
-# ============================================
-
-# cluster_name                       = "oke-cluster-dev"
-# kubernetes_version                 = "v1.32.1"
-# cluster_type                       = "ENHANCED_CLUSTER"
-# cni_type                           = "OCI_VCN_IP_NATIVE"
-# is_kubernetes_dashboard_enabled    = false
-
-# ============================================
-# NODE POOL (Required: ssh_public_key)
-# ============================================
-
 ssh_public_key = "ssh-rsa AAAAB3... your-ssh-public-key-here"
 
-# Optional node pool configuration
-# node_pool_name                            = "oke-node-pool-dev"
-# node_shape                                = "VM.Standard.E3.Flex"
-# node_count                                = 2
-# node_pool_node_shape_config_ocpus         = 2
-# node_pool_node_shape_config_memory_in_gbs = 16
-# boot_volume_size_in_gbs                   = 50
-# max_pods_per_node                         = null
-# nsg_ids                                   = []
-# pod_nsg_ids                               = []
+# ============================================
+# NETWORK CONFIGURATION: Public or Private?
+# ============================================
+kubapi_subnet_is_public = false  # true = public Kubernetes API, false = private (bastion access)
+lb_subnet_is_public     = false  # true = public load balancers, false = private (internal only)
+
+# ============================================
+# OKE CLUSTER CONFIGURATION
+# ============================================
+cluster_name                              = "oke-cluster-dev"
+kubernetes_version                        = "v1.33.1"
+cluster_type                              = "ENHANCED_CLUSTER"
+cni_type                                  = "OCI_VCN_IP_NATIVE"
+is_kubernetes_dashboard_enabled           = false
+
+# ============================================
+# NODE POOL CONFIGURATION
+# ============================================
+node_pool_name                            = "oke-node-pool-dev"
+node_shape                                = "VM.Standard.E4.Flex"
+node_count                                = 1
+node_pool_node_shape_config_ocpus         = 2
+node_pool_node_shape_config_memory_in_gbs = 16
+boot_volume_size_in_gbs                   = 50
+max_pods_per_node                         = null
+nsg_ids                                   = []
+pod_nsg_ids                               = []
+
+# ============================================
+# COMMON DEPLOYMENT SCENARIOS
+# ============================================
+
+# Scenario 1: Production (All Private) - DEFAULT
+# kubapi_subnet_is_public = false
+# lb_subnet_is_public     = false
+# Access API via bastion, LB internal only
+
+# Scenario 2: Development (Public API, Private LB)
+# kubapi_subnet_is_public = true
+# lb_subnet_is_public     = false
+# Direct kubectl access, LB internal only
+
+# Scenario 3: Public Application (Private API, Public LB)
+# kubapi_subnet_is_public = false
+# lb_subnet_is_public     = true
+# API via bastion, LB accepts internet traffic
+
+# Scenario 4: Testing (All Public)
+# kubapi_subnet_is_public = true
+# lb_subnet_is_public     = true
+# Everything publicly accessible
