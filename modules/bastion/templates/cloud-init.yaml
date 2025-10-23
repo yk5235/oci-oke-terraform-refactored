@@ -1,0 +1,325 @@
+#cloud-config
+# ============================================
+# Cloud-init configuration for OKE Workshop Bastion
+# ============================================
+
+# Update system packages
+package_update: true
+package_upgrade: true
+
+# Install required packages
+packages:
+  - git
+  - vim
+  - nano
+  - curl
+  - wget
+  - unzip
+  - jq
+  - nc
+  - python3
+  - python3-pip
+  - yum-utils
+  - device-mapper-persistent-data
+  - lvm2
+  - tmux
+  - tree
+
+# Configure firewall
+runcmd:
+  # ============================================
+  # System Setup
+  # ============================================
+  - echo "Starting bastion host configuration..." | tee -a /var/log/bastion-setup.log
+  - date | tee -a /var/log/bastion-setup.log
+  
+  # Disable firewall (bastion is protected by security lists)
+  - systemctl stop firewalld
+  - systemctl disable firewalld
+  
+  # Set timezone
+  - timedatectl set-timezone UTC
+  
+  # ============================================
+  # Install Docker
+  # ============================================
+  - echo "Installing Docker..." | tee -a /var/log/bastion-setup.log
+  - yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+  - yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - systemctl start docker
+  - systemctl enable docker
+  - usermod -aG docker opc
+  - docker --version | tee -a /var/log/bastion-setup.log
+  
+  # ============================================
+  # Install kubectl
+  # ============================================
+  - echo "Installing kubectl..." | tee -a /var/log/bastion-setup.log
+  - |
+    if [ "${kubectl_version}" = "latest" ]; then
+      KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+    else
+      KUBECTL_VERSION="${kubectl_version}"
+    fi
+    curl -LO "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"
+    chmod +x kubectl
+    mv kubectl /usr/local/bin/
+    kubectl version --client --short | tee -a /var/log/bastion-setup.log
+  
+  # ============================================
+  # Install OCI CLI
+  # ============================================
+  - echo "Installing OCI CLI..." | tee -a /var/log/bastion-setup.log
+  - |
+    curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh -o install_oci.sh
+    chmod +x install_oci.sh
+    ./install_oci.sh --accept-all-defaults --exec-dir /usr/local/bin --install-dir /usr/local/lib
+    rm -f install_oci.sh
+    /usr/local/bin/oci --version | tee -a /var/log/bastion-setup.log
+  
+  # ============================================
+  # Install Helm
+  # ============================================
+  - echo "Installing Helm..." | tee -a /var/log/bastion-setup.log
+  - |
+    curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+    chmod 700 get_helm.sh
+    ./get_helm.sh
+    rm -f get_helm.sh
+    helm version --short | tee -a /var/log/bastion-setup.log
+  
+  # ============================================
+  # Install additional tools
+  # ============================================
+  - echo "Installing additional tools..." | tee -a /var/log/bastion-setup.log
+  
+  # Install k9s (Kubernetes CLI manager)
+  - |
+    K9S_VERSION=$(curl -s https://api.github.com/repos/derailed/k9s/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+    curl -L https://github.com/derailed/k9s/releases/download/$K9S_VERSION/k9s_Linux_amd64.tar.gz -o k9s.tar.gz
+    tar xzf k9s.tar.gz
+    mv k9s /usr/local/bin/
+    rm -f k9s.tar.gz README.md LICENSE
+    k9s version --short | tee -a /var/log/bastion-setup.log || echo "k9s installed"
+  
+  # Install stern (multi pod log tailing)
+  - |
+    STERN_VERSION=$(curl -s https://api.github.com/repos/stern/stern/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")')
+    curl -L https://github.com/stern/stern/releases/download/$STERN_VERSION/stern_$${STERN_VERSION#v}_linux_amd64.tar.gz -o stern.tar.gz
+    tar xzf stern.tar.gz
+    mv stern /usr/local/bin/
+    rm -f stern.tar.gz LICENSE
+    stern --version | tee -a /var/log/bastion-setup.log || echo "stern installed"
+  
+  # ============================================
+  # Setup for OPC user
+  # ============================================
+  - echo "Configuring opc user environment..." | tee -a /var/log/bastion-setup.log
+  
+  # Create directories
+  - sudo -u opc mkdir -p /home/opc/.kube
+  - sudo -u opc mkdir -p /home/opc/.oci
+  - sudo -u opc mkdir -p /home/opc/bin
+  
+  # ============================================
+  # Setup kubeconfig if cluster_id is provided
+  # ============================================
+  %{ if setup_kubeconfig && cluster_id != "" ~}
+  - echo "Setting up kubeconfig for OKE cluster..." | tee -a /var/log/bastion-setup.log
+  - |
+    # Generate kubeconfig using OCI CLI (requires instance principal or user auth)
+    export OCI_CLI_AUTH=instance_principal
+    /usr/local/bin/oci ce cluster create-kubeconfig \
+      --cluster-id ${cluster_id} \
+      --file /home/opc/.kube/config \
+      --region ${region} \
+      --token-version 2.0.0 \
+      --kube-endpoint PRIVATE_ENDPOINT 2>/dev/null || \
+    echo "Note: Kubeconfig generation requires OCI CLI authentication setup" | tee -a /var/log/bastion-setup.log
+    
+    # Set proper ownership
+    chown -R opc:opc /home/opc/.kube
+    chmod 600 /home/opc/.kube/config 2>/dev/null || true
+  %{ endif ~}
+  
+  # ============================================
+  # Clone sample application repository
+  # ============================================
+  - echo "Cloning sample application..." | tee -a /var/log/bastion-setup.log
+  - |
+    cd /home/opc
+    git clone https://github.com/oracle-quickstart/oci-oke-sample-app.git customer-management-app 2>/dev/null || \
+    echo "Using local sample app structure" | tee -a /var/log/bastion-setup.log
+    chown -R opc:opc /home/opc/customer-management-app 2>/dev/null || true
+  
+  # ============================================
+  # Setup bash environment for opc user
+  # ============================================
+  - |
+    cat >> /home/opc/.bashrc << 'EOF'
+    
+    # OKE Workshop Environment
+    export PATH=$PATH:/usr/local/bin:/home/opc/bin
+    export KUBECONFIG=/home/opc/.kube/config
+    
+    # OCI Settings
+    export OCI_REGION=${region}
+    export TENANCY_NAMESPACE=${tenancy_namespace}
+    export COMPARTMENT_ID=${compartment_id}
+    
+    # Kubernetes aliases
+    alias k='kubectl'
+    alias kgp='kubectl get pods'
+    alias kgs='kubectl get svc'
+    alias kgn='kubectl get nodes'
+    alias kaf='kubectl apply -f'
+    alias kdel='kubectl delete -f'
+    alias klog='kubectl logs -f'
+    alias kexec='kubectl exec -it'
+    
+    # Docker aliases
+    alias d='docker'
+    alias dps='docker ps'
+    alias dpsa='docker ps -a'
+    alias dimg='docker images'
+    alias drm='docker rm -f'
+    alias drmi='docker rmi -f'
+    
+    # Utility functions
+    function kns() {
+      if [ -z "$1" ]; then
+        kubectl config view --minify --output 'jsonpath={..namespace}'
+        echo
+      else
+        kubectl config set-context --current --namespace=$1
+      fi
+    }
+    
+    # Show cluster info on login
+    if [ -f "$KUBECONFIG" ]; then
+      echo ""
+      echo "========================================"
+      echo "   OKE Workshop Bastion Host"
+      echo "========================================"
+      echo "Kubernetes cluster: ${cluster_endpoint}"
+      echo "Current context: $(kubectl config current-context 2>/dev/null || echo 'Not configured')"
+      echo ""
+      echo "Quick commands:"
+      echo "  k get nodes     - List cluster nodes"
+      echo "  k get pods -A   - List all pods"
+      echo "  k9s            - Interactive K8s manager"
+      echo ""
+      echo "Sample app location: ~/customer-management-app"
+      echo ""
+    fi
+    EOF
+    
+    chown opc:opc /home/opc/.bashrc
+  
+  # ============================================
+  # Create helper scripts
+  # ============================================
+  - |
+    # Create OCI Registry login script
+    cat > /home/opc/bin/oci-registry-login.sh << 'EOF'
+    #!/bin/bash
+    echo "========================================"
+    echo "OCI Container Registry Login"
+    echo "========================================"
+    echo ""
+    echo "Enter your OCI username (e.g., oracleidentitycloudservice/your.email@example.com):"
+    read -r OCI_USERNAME
+    echo ""
+    echo "Enter your OCI Auth Token:"
+    read -rs OCI_AUTH_TOKEN
+    echo ""
+    
+    REGION="${region}"
+    TENANCY="${tenancy_namespace}"
+    
+    echo "Logging into $${REGION}.ocir.io..."
+    echo "$${OCI_AUTH_TOKEN}" | docker login $${REGION}.ocir.io -u "$${TENANCY}/$${OCI_USERNAME}" --password-stdin
+    
+    if [ $? -eq 0 ]; then
+      echo "✓ Successfully logged into OCI Registry"
+      echo ""
+      echo "Registry URL: $${REGION}.ocir.io/$${TENANCY}"
+    else
+      echo "✗ Failed to login. Please check your credentials."
+    fi
+    EOF
+    
+    chmod +x /home/opc/bin/oci-registry-login.sh
+    chown opc:opc /home/opc/bin/oci-registry-login.sh
+  
+  # Create cluster info script
+  - |
+    cat > /home/opc/bin/cluster-info.sh << 'EOF'
+    #!/bin/bash
+    echo "========================================"
+    echo "OKE Cluster Information"
+    echo "========================================"
+    echo ""
+    echo "Cluster Endpoint: ${cluster_endpoint}"
+    echo "Region: ${region}"
+    echo "Compartment: ${compartment_id}"
+    echo ""
+    echo "Nodes:"
+    kubectl get nodes 2>/dev/null || echo "Kubeconfig not configured"
+    echo ""
+    echo "Namespaces:"
+    kubectl get namespaces 2>/dev/null || echo "Kubeconfig not configured"
+    EOF
+    
+    chmod +x /home/opc/bin/cluster-info.sh
+    chown opc:opc /home/opc/bin/cluster-info.sh
+  
+  # ============================================
+  # Final setup
+  # ============================================
+  - echo "Fixing permissions..." | tee -a /var/log/bastion-setup.log
+  - chown -R opc:opc /home/opc
+  - chmod 700 /home/opc/.ssh 2>/dev/null || true
+  - chmod 600 /home/opc/.ssh/authorized_keys 2>/dev/null || true
+  
+  # Create completion marker
+  - touch /var/log/bastion-setup-complete
+  - echo "Bastion setup completed at $(date)" | tee -a /var/log/bastion-setup.log
+  - echo "======================================" | tee -a /var/log/bastion-setup.log
+  
+  # Final message
+  - |
+    cat > /etc/motd << 'EOF'
+    ======================================
+         OKE Workshop Bastion Host
+    ======================================
+    
+    Tools installed:
+      • Docker
+      • kubectl
+      • OCI CLI
+      • Helm
+      • k9s
+      • stern
+    
+    Useful commands:
+      • oci-registry-login.sh - Login to OCI Registry
+      • cluster-info.sh       - Show cluster information
+      • k get nodes          - List Kubernetes nodes
+      • k9s                  - Interactive Kubernetes UI
+    
+    Sample application:
+      ~/customer-management-app
+    
+    Documentation:
+      ~/customer-management-app/KUBERNETES.md
+    
+    ======================================
+    EOF
+
+# Reboot after setup (optional)
+power_state:
+  mode: reboot
+  delay: "+1"
+  message: "Rebooting after bastion setup completion"
+  condition: true

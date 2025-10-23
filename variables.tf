@@ -215,3 +215,160 @@ variable "pod_nsg_ids" {
   type        = list(string)
   default     = []
 }
+
+# ============================================
+# BASTION MODULE VARIABLES
+# Add these to your existing variables.tf
+# ============================================
+
+# ============================================
+# BASTION CONFIGURATION
+# ============================================
+
+variable "enable_bastion" {
+  description = "Enable bastion host deployment"
+  type        = bool
+  default     = true
+}
+
+variable "create_bastion_subnet" {
+  description = "Create a dedicated subnet for bastion host"
+  type        = bool
+  default     = true
+}
+
+variable "bastion_subnet_cidr" {
+  description = "CIDR block for bastion subnet"
+  type        = string
+  default     = "10.0.3.0/28"  # 16 IPs
+  validation {
+    condition     = can(cidrhost(var.bastion_subnet_cidr, 0))
+    error_message = "bastion_subnet_cidr must be a valid CIDR block"
+  }
+}
+
+variable "bastion_existing_subnet_id" {
+  description = "Existing subnet ID for bastion (if not creating new subnet)"
+  type        = string
+  default     = ""
+}
+
+variable "bastion_allowed_ssh_cidr" {
+  description = "CIDR block allowed to SSH to bastion (0.0.0.0/0 for anywhere)"
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+variable "bastion_display_name" {
+  description = "Display name for bastion host"
+  type        = string
+  default     = "oke-workshop-bastion"
+}
+
+variable "bastion_shape" {
+  description = "Shape of the bastion instance"
+  type        = string
+  default     = "VM.Standard.E3.Flex"
+}
+
+variable "bastion_shape_config" {
+  description = "Shape configuration for flexible shapes"
+  type = object({
+    ocpus         = number
+    memory_in_gbs = number
+  })
+  default = {
+    ocpus         = 1
+    memory_in_gbs = 8
+  }
+}
+
+variable "bastion_boot_volume_size" {
+  description = "Boot volume size for bastion in GBs"
+  type        = number
+  default     = 50
+}
+
+# ============================================
+# TOOL VERSIONS
+# ============================================
+
+variable "docker_version" {
+  description = "Docker version to install on bastion"
+  type        = string
+  default     = "latest"
+}
+
+variable "kubectl_version" {
+  description = "Kubectl version to install on bastion"
+  type        = string
+  default     = "latest"
+}
+
+variable "oci_cli_version" {
+  description = "OCI CLI version to install on bastion"
+  type        = string
+  default     = "latest"
+}
+
+variable "helm_version" {
+  description = "Helm version to install on bastion"
+  type        = string
+  default     = "latest"
+}
+
+# ============================================
+# INTEGRATION OPTIONS
+# ============================================
+
+variable "bastion_setup_kubeconfig" {
+  description = "Automatically setup kubeconfig on bastion"
+  type        = bool
+  default     = true
+}
+
+variable "bastion_wait_for_cloud_init" {
+  description = "Wait for cloud-init to complete on bastion"
+  type        = bool
+  default     = false
+}
+
+variable "tenancy_namespace" {
+  description = "Tenancy namespace for OCI Container Registry"
+  type        = string
+  default     = ""
+}
+
+# ============================================
+# SSH KEYS (for provisioning)
+# ============================================
+
+variable "ssh_private_key" {
+  description = "SSH private key for remote provisioning (optional)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# ============================================
+# ENVIRONMENT & TAGS
+# ============================================
+
+variable "environment" {
+  description = "Environment name (dev, test, prod)"
+  type        = string
+  default     = "dev"
+  validation {
+    condition     = contains(["dev", "test", "prod"], var.environment)
+    error_message = "environment must be dev, test, or prod"
+  }
+}
+
+variable "tags" {
+  description = "Freeform tags to apply to all resources"
+  type        = map(string)
+  default = {
+    "ManagedBy" = "Terraform"
+    "Project"   = "OKE-Workshop"
+  }
+}

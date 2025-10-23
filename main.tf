@@ -1,6 +1,6 @@
 # ============================================
-# ROOT MAIN - REFACTORED
-# Orchestrates networking and OKE modules
+# ROOT MAIN - WITH BASTION MODULE
+# Orchestrates networking, OKE, and bastion modules
 # ============================================
 
 # ============================================
@@ -66,4 +66,77 @@ module "oke" {
   max_pods_per_node                         = var.max_pods_per_node
   nsg_ids                                   = var.nsg_ids
   pod_nsg_ids                               = var.pod_nsg_ids
+}
+
+# ============================================
+# BASTION MODULE
+# Creates bastion host for cluster access
+# ============================================
+
+module "bastion" {
+  source = "./modules/bastion"
+  
+  # Only create bastion if enabled
+  count = var.enable_bastion ? 1 : 0
+
+  # Common
+  compartment_id = var.compartment_id
+  region         = var.region
+
+  # Network Configuration
+  vcn_id              = module.networking.vcn_id
+  vcn_cidr            = var.vcn_cidr
+  internet_gateway_id = module.networking.internet_gateway_id
+  service_gateway_id  = module.networking.service_gateway_id
+  
+  # Use service CIDR from networking module data source
+  services_cidr = data.oci_core_services.all_services.services[0].cidr_block
+
+  # Bastion Subnet Configuration
+  create_bastion_subnet = var.create_bastion_subnet
+  bastion_subnet_cidr   = var.bastion_subnet_cidr
+  existing_subnet_id    = var.bastion_existing_subnet_id
+  
+  # Access Control
+  allowed_ssh_cidr = var.bastion_allowed_ssh_cidr
+  ssh_public_key   = var.ssh_public_key  # Same key as nodes
+  ssh_private_key  = var.ssh_private_key  # Optional for provisioning
+  
+  # Instance Configuration
+  bastion_display_name = var.bastion_display_name
+  bastion_shape        = var.bastion_shape
+  bastion_shape_config = var.bastion_shape_config
+  boot_volume_size     = var.bastion_boot_volume_size
+  
+  # Tool Versions
+  docker_version  = var.docker_version
+  kubectl_version = var.kubectl_version
+  oci_cli_version = var.oci_cli_version
+  helm_version    = var.helm_version
+  
+  # OKE Integration
+  cluster_id          = module.oke.cluster_id
+  cluster_endpoint    = module.oke.cluster_endpoint
+  setup_kubeconfig    = var.bastion_setup_kubeconfig
+  tenancy_namespace   = var.tenancy_namespace
+  
+  # Provisioning Options
+  wait_for_cloud_init = var.bastion_wait_for_cloud_init
+  
+  # Tags
+  environment = var.environment
+  tags        = var.tags
+}
+
+# ============================================
+# DATA SOURCE FOR SERVICE CIDR
+# (Required for bastion module)
+# ============================================
+
+data "oci_core_services" "all_services" {
+  filter {
+    name   = "name"
+    values = ["All .* Services In Oracle Services Network"]
+    regex  = true
+  }
 }
