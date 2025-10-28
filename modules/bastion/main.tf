@@ -42,6 +42,7 @@ resource "oci_core_subnet" "bastion_subnet" {
 # ROUTE TABLE FOR BASTION SUBNET
 # ============================================
 
+# Find the route table resource and replace it with:
 resource "oci_core_route_table" "bastion_rt" {
   count = var.create_bastion_subnet ? 1 : 0
 
@@ -49,19 +50,12 @@ resource "oci_core_route_table" "bastion_rt" {
   vcn_id         = var.vcn_id
   display_name   = "rt-bastion-public"
 
+  # Only Internet Gateway route for public subnet
   route_rules {
     destination       = "0.0.0.0/0"
     destination_type  = "CIDR_BLOCK"
     network_entity_id = var.internet_gateway_id
     description       = "Default route to Internet Gateway"
-  }
-
-  # Add Service Gateway route for OCI services
-  route_rules {
-    destination       = var.services_cidr
-    destination_type  = "SERVICE_CIDR_BLOCK"
-    network_entity_id = var.service_gateway_id
-    description       = "Route to OCI Services"
   }
 }
 
@@ -121,20 +115,59 @@ resource "oci_core_security_list" "bastion_sl" {
 # ============================================
 
 locals {
-  cloud_init_content = templatefile("${path.module}/templates/cloud-init.yaml", {
-    docker_version     = var.docker_version
-    kubectl_version    = var.kubectl_version
-    oci_cli_version    = var.oci_cli_version
-    helm_version       = var.helm_version
-    region             = var.region
-    cluster_id         = var.cluster_id
-    cluster_endpoint   = var.cluster_endpoint
-    tenancy_namespace  = var.tenancy_namespace
-    compartment_id     = var.compartment_id
-    vcn_cidr           = var.vcn_cidr
-    setup_kubeconfig   = var.setup_kubeconfig
-  })
+  # Use a simple bash script instead of complex cloud-init YAML
+  cloud_init_script = <<-EOT
+#!/bin/bash
+exec > >(tee -a /var/log/bastion-setup.log)
+exec 2>&1
+
+echo "Starting bastion setup at $(date)"
+
+#--------------------------------------------------------------------------------
+# Install Core Tools (Git and yum-utils)
+#--------------------------------------------------------------------------------
+echo "--> Installing Git and yum-utils..."
+# Git added as requested
+yum install -y git yum-utils
+
+# Install Docker
+yum install -y yum-utils
+yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+yum install -y docker-ce docker-ce-cli containerd.io
+systemctl start docker
+systemctl enable docker
+usermod -aG docker opc
+
+# Install kubectl
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x kubectl
+mv kubectl /usr/local/bin/
+
+#--------------------------------------------------------------------------------
+# Install OCI CLI (FIXED: Ensures installation as opc user and persistent PATH)
+#--------------------------------------------------------------------------------
+echo "--> Installing OCI CLI as opc user..."
+# This command runs the installer as the 'opc' user, ensuring files go to /home/opc/bin 
+# and the user's .bashrc is ideally updated by the installer itself.
+su - opc -c 'bash -c "$(curl -L https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh)" -- --accept-all-defaults --exec-dir /home/opc/bin'
+
+# Manual PATH addition for guarantee (writes to the opc user's profile)
+echo 'export PATH="/home/opc/bin:$PATH"' >> /home/opc/.bashrc
+
+# Manual PATH addition for all users (writes to a system-wide script)
+echo 'export PATH="/home/opc/bin:$PATH"' >> /etc/profile.d/oci-cli.sh
+chmod +x /etc/profile.d/oci-cli.sh
+
+# Note: Directly using 'source /home/opc/.bashrc' is NOT necessary here 
+# because the cloud-init script ends after this. The next command executed 
+# is the user logging in via SSH, which will automatically source the files 
+# we just modified (.bashrc and /etc/profile.d/oci-cli.sh).
+
+echo "Bastion setup completed at $(date)"
+EOT
 }
+
+
 
 # ============================================
 # BASTION INSTANCE
@@ -168,9 +201,10 @@ resource "oci_core_instance" "bastion" {
     nsg_ids                = var.nsg_ids
   }
 
+  # Then in the instance metadata:
   metadata = {
     ssh_authorized_keys = var.ssh_public_key
-    user_data           = base64encode(local.cloud_init_content)
+    user_data           = base64encode(local.cloud_init_script)
   }
 
   preserve_boot_volume = false
